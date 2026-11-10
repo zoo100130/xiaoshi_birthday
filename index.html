@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow,noarchive">
 <meta property="og:title" content="小士十八歲生日">
 <meta property="og:description" content="從台灣寄到海南的十八歲生日祝福">
 <style>
@@ -622,7 +623,22 @@ const BAKED=window.WISHES_LAYOUT||{};
 const wishSec=document.querySelector('.wishes'),wnotes=[...wishSec.querySelectorAll('.note')];
 let layout={...BAKED},editing=false,wDragging=false,wRef=null,saveT=0;
 const arrStatus=byId('arr-status'),arrToggle=byId('arr-toggle'),arrReset=byId('arr-reset');
-function applyLayout(){const w=wishSec.clientWidth||1;wnotes.forEach(n=>{const p=layout[n.dataset.id];n.style.translate=p?`${(p.x*w).toFixed(1)}px ${p.y.toFixed(1)}px`:'';});}
+/* 手機太窄，自訂位置會把字推出畫面，所以窄螢幕用預設排版 */
+const LAYOUT_MIN_W=700;
+function applyLayout(){
+  const w=wishSec.clientWidth||1;
+  wnotes.forEach(n=>n.style.translate='');
+  if(innerWidth<LAYOUT_MIN_W&&!editing)return;
+  const sr=wishSec.getBoundingClientRect();
+  wnotes.forEach(n=>{
+    const p=layout[n.dataset.id];if(!p)return;
+    const b=n.getBoundingClientRect();
+    /* 不管拖到哪，都把字留在版面裡，不會被切掉 */
+    const dx=Math.max(sr.left-b.left,Math.min(sr.right-b.right,p.x*w));
+    p.x=dx/w;
+    n.style.translate=`${dx.toFixed(1)}px ${p.y.toFixed(1)}px`;
+  });
+}
 applyLayout();addEventListener('resize',applyLayout);
 function save(){
   if(!wRef)return;clearTimeout(saveT);arrStatus.textContent='儲存中…';
@@ -662,12 +678,24 @@ const stLayer=byId('stickers'),wrapEl=document.querySelector('.wrap'),stkMsg=byI
 const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej({code:'timeout'}),ms))]);
 const clampW=w=>Math.max(80,Math.min(w,420,(wrapEl.clientWidth||400)-20));
 function saveStk(){if(!sRef)return;sRef.set({items:stk}).then(()=>stkMsg.textContent='已儲存').catch(()=>stkMsg.textContent='沒存到，再試一次');}
-function placeStk(d,s){const W=wrapEl.clientWidth;d.style.left=(s.x*W).toFixed(1)+'px';d.style.top=s.y.toFixed(1)+'px';d.style.width=clampW(s.w)+'px';d.style.setProperty('--r',s.r+'deg');}
+function placeStk(d,s){
+  const W=wrapEl.clientWidth||1,w=clampW(s.w),half=w/2;
+  /* 圖片是置中在 left 上，先把中心點夾在版面內 */
+  const cx=Math.max(half,Math.min(W-half,s.x*W));
+  d.style.left=cx.toFixed(1)+'px';d.style.top=s.y.toFixed(1)+'px';
+  d.style.width=w+'px';d.style.setProperty('--r',s.r+'deg');
+  /* 旋轉過的圖實際比 w 更寬，量完再補推回來，窄螢幕才不會被切掉半張 */
+  if(!d.isConnected)return;
+  const wr=wrapEl.getBoundingClientRect(),b=d.getBoundingClientRect();
+  const shift=b.left<wr.left?wr.left-b.left:(b.right>wr.right?wr.right-b.right:0);
+  if(shift)d.style.left=(cx+shift).toFixed(1)+'px';
+}
 function renderStk(){
   stLayer.replaceChildren();
   stk.forEach(s=>{
     const d=document.createElement('div');d.className='stk'+((s.f??true)?'':' noframe')+(s.m?' blend':'');
     const img=new Image();img.src=s.url;img.alt='照片';img.draggable=false;d.appendChild(img);
+    img.addEventListener('load',()=>placeStk(d,s));
     const t=document.createElement('div');t.className='tools';
     [['s','−','縮小'],['b','＋','放大'],['r','↻','旋轉'],['f','框','白框開關'],['m','去白','去掉圖片本身的白底'],['x','✕','刪除']].forEach(([a,txt,lab])=>{
       const b=document.createElement('button');b.type='button';b.dataset.a=a;b.textContent=txt;b.setAttribute('aria-label',lab);t.appendChild(b);});
@@ -696,7 +724,7 @@ function renderStk(){
       move:(dx,dy)=>{const W=wrapEl.clientWidth||1;s.x=Math.max(0,Math.min(1,(ox+dx)/W));s.y=Math.max(0,oy+dy);placeStk(d,s);},
       end:moved=>{sDrag=false;d.classList.remove('dragging');if(moved)saveStk();}
     });
-    stLayer.appendChild(d);
+    stLayer.appendChild(d);placeStk(d,s);
   });
 }
 renderStk();addEventListener('resize',()=>stLayer.querySelectorAll('.stk').forEach((d,i)=>stk[i]&&placeStk(d,stk[i])));
