@@ -623,8 +623,9 @@ const BAKED=window.WISHES_LAYOUT||{};
 const wishSec=document.querySelector('.wishes'),wnotes=[...wishSec.querySelectorAll('.note')];
 let layout={...BAKED},editing=false,wDragging=false,wRef=null,saveT=0;
 const arrStatus=byId('arr-status'),arrToggle=byId('arr-toggle'),arrReset=byId('arr-reset');
-/* 手機太窄，自訂位置會把字推出畫面，所以窄螢幕用預設排版 */
-const LAYOUT_MIN_W=700;
+/* 版面在 792px 以上才會維持 760px 的設計寬度，比這窄就回到預設排版，
+   否則用像素記的位置會把字推出畫面外切掉 */
+const LAYOUT_MIN_W=800;
 function applyLayout(){
   const w=wishSec.clientWidth||1;
   wnotes.forEach(n=>n.style.translate='');
@@ -633,9 +634,9 @@ function applyLayout(){
   wnotes.forEach(n=>{
     const p=layout[n.dataset.id];if(!p)return;
     const b=n.getBoundingClientRect();
-    /* 不管拖到哪，都把字留在版面裡，不會被切掉 */
+    /* 只夾顯示用的數值，不回寫 p.x：字型還沒載完時量到的寬度不準，
+       回寫會把存檔裡的位置改壞 */
     const dx=Math.max(sr.left-b.left,Math.min(sr.right-b.right,p.x*w));
-    p.x=dx/w;
     n.style.translate=`${dx.toFixed(1)}px ${p.y.toFixed(1)}px`;
   });
 }
@@ -677,12 +678,32 @@ let stk=[...BAKED_STK],stkEdit=false,stkOwner=false,sRef=null,assetsNs=null,sDra
 const stLayer=byId('stickers'),wrapEl=document.querySelector('.wrap'),stkMsg=byId('stk-msg');
 const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej({code:'timeout'}),ms))]);
 const clampW=w=>Math.max(80,Math.min(w,420,(wrapEl.clientWidth||400)-20));
+/* 寬度也用比例記（wr＝版面寬度的幾成），手機上圖才會跟著縮小，
+   不然 220px 的圖在手機上會占掉半個畫面、把祝福語蓋住 */
+const stkW=s=>clampW(s.wr!=null?s.wr*(wrapEl.clientWidth||400):s.w);
+function setStkW(s,px){const W=wrapEl.clientWidth||400;s.w=clampW(px);s.wr=s.w/W;}
 function saveStk(){if(!sRef)return;sRef.set({items:stk}).then(()=>stkMsg.textContent='已儲存').catch(()=>stkMsg.textContent='沒存到，再試一次');}
+/* 圖片的垂直位置綁在祝福語區塊上（fy＝該區塊高度的幾成），
+   不是綁死的像素。這樣換螢幕寬度、字型載入後高度變了，
+   圖片還是待在同一段文字旁邊，不會整批往下掉。 */
+const STK_ANCHOR='.wishes';
+function anchorBox(){
+  const a=document.querySelector(STK_ANCHOR);if(!a)return null;
+  const ab=a.getBoundingClientRect(),wb=wrapEl.getBoundingClientRect();
+  return {top:ab.top-wb.top,h:ab.height||1};
+}
+function stkTop(s){
+  if(s.fy==null)return s.y||0;
+  const a=anchorBox();return a?a.top+s.fy*a.h:(s.y||0);
+}
+function setStkTop(s,top){
+  s.y=top;const a=anchorBox();if(a)s.fy=(top-a.top)/a.h;
+}
 function placeStk(d,s){
-  const W=wrapEl.clientWidth||1,w=clampW(s.w),half=w/2;
+  const W=wrapEl.clientWidth||1,w=stkW(s),half=w/2;
   /* 圖片是置中在 left 上，先把中心點夾在版面內 */
   const cx=Math.max(half,Math.min(W-half,s.x*W));
-  d.style.left=cx.toFixed(1)+'px';d.style.top=s.y.toFixed(1)+'px';
+  d.style.left=cx.toFixed(1)+'px';d.style.top=stkTop(s).toFixed(1)+'px';
   d.style.width=w+'px';d.style.setProperty('--r',s.r+'deg');
   /* 旋轉過的圖實際比 w 更寬，量完再補推回來，窄螢幕才不會被切掉半張 */
   if(!d.isConnected)return;
@@ -702,8 +723,8 @@ function renderStk(){
     d.appendChild(t);placeStk(d,s);
     t.addEventListener('click',e=>{
       const b=e.target.closest('button');if(!b)return;e.stopPropagation();
-      if(b.dataset.a==='s')s.w=clampW(s.w*.85);
-      if(b.dataset.a==='b')s.w=clampW(s.w*1.18);
+      if(b.dataset.a==='s')setStkW(s,stkW(s)*.85);
+      if(b.dataset.a==='b')setStkW(s,stkW(s)*1.18);
       if(b.dataset.a==='r')s.r=((s.r+8+180)%360)-180;
       if(b.dataset.a==='f'){s.f=!(s.f??true);d.classList.toggle('noframe',!s.f);}
       if(b.dataset.a==='m'){s.m=!s.m;if(s.m&&(s.f??true)){s.f=false;d.classList.add('noframe');}d.classList.toggle('blend',s.m);}
@@ -720,14 +741,21 @@ function renderStk(){
     let ox=0,oy=0;
     makeDrag(d,{
       can:e=>stkOwner&&!(e.target.closest&&e.target.closest('button')),
-      start:()=>{sDrag=true;ox=s.x*wrapEl.clientWidth;oy=s.y;d.classList.add('dragging');},
-      move:(dx,dy)=>{const W=wrapEl.clientWidth||1;s.x=Math.max(0,Math.min(1,(ox+dx)/W));s.y=Math.max(0,oy+dy);placeStk(d,s);},
+      start:()=>{sDrag=true;ox=s.x*wrapEl.clientWidth;oy=stkTop(s);d.classList.add('dragging');},
+      move:(dx,dy)=>{const W=wrapEl.clientWidth||1;s.x=Math.max(0,Math.min(1,(ox+dx)/W));setStkTop(s,Math.max(0,oy+dy));placeStk(d,s);},
       end:moved=>{sDrag=false;d.classList.remove('dragging');if(moved)saveStk();}
     });
     stLayer.appendChild(d);placeStk(d,s);
   });
 }
-renderStk();addEventListener('resize',()=>stLayer.querySelectorAll('.stk').forEach((d,i)=>stk[i]&&placeStk(d,stk[i])));
+function placeAllStk(){stLayer.querySelectorAll('.stk').forEach((d,i)=>stk[i]&&placeStk(d,stk[i]));}
+renderStk();addEventListener('resize',placeAllStk);
+/* 第一次執行時 Google 字型通常還沒載完，量到的是備用字型的高度，
+   位置會整個偏掉。字型載完、圖片載完都要再擺一次。 */
+function relayoutAll(){applyLayout();placeAllStk();}
+addEventListener('load',relayoutAll);
+if(document.fonts&&document.fonts.ready)document.fonts.ready.then(relayoutAll).catch(()=>{});
+setTimeout(relayoutAll,1200);
 function setStkEdit(on){stkEdit=on;stLayer.classList.toggle('editing',on);const b=byId('stk-edit');b.textContent=on?'整理好了':'整理圖片';b.setAttribute('aria-pressed',on);
   stkMsg.textContent=on?'用照片下面的小按鈕縮放、旋轉、刪除':'照片可以直接拖曳';}
 byId('stk-edit').addEventListener('click',()=>setStkEdit(!stkEdit));
@@ -777,7 +805,7 @@ if(location.hash==='#edit'&&!(window.claude&&window.claude.use)){
   byId('arrange').hidden=false;stkMsg.textContent='拖好之後按「複製設定檔」';
   byId('stk-copy').addEventListener('click',()=>{
     const r=v=>Math.round(v*10000)/10000;
-    const stTxt='window.STICKERS = [\n'+stk.map(o=>'  '+JSON.stringify({file:o.file,x:r(o.x),y:r(o.y),w:Math.round(o.w),r:o.r,f:!!o.f,...(o.m?{m:true}:{})})).join(',\n')+'\n];';
+    const stTxt='window.STICKERS = [\n'+stk.map(o=>'  '+JSON.stringify({file:o.file,x:r(o.x),fy:r(o.fy!=null?o.fy:0),wr:r(o.wr!=null?o.wr:o.w/760),r:o.r,f:!!o.f,...(o.m?{m:true}:{})})).join(',\n')+'\n];';
     const wl={};Object.keys(layout).forEach(k=>wl[k]={x:r(layout[k].x),y:r(layout[k].y)});
     const txt='// 貼到 config/stickers.js（取代 window.STICKERS 那段）\n'+stTxt+'\n\n// 貼到 config/wishes-layout.js（取代 window.WISHES_LAYOUT 那段）\nwindow.WISHES_LAYOUT = '+JSON.stringify(wl)+';';
     const done=()=>stkMsg.textContent='已複製，貼進 config 資料夾的兩個檔案';
