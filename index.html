@@ -186,6 +186,9 @@ h1,h2{text-wrap:balance;margin:0;font-weight:700}
 .stk::before{content:"";position:absolute;top:-10px;left:50%;width:56px;height:20px;margin-left:-28px;background:rgba(246,195,67,.65);transform:rotate(-4deg)}
 .stk .tools{display:none;position:absolute;bottom:4px;left:0;right:0;justify-content:center;gap:4px}
 .stickers.owner .stk{cursor:grab;touch-action:none;-webkit-touch-callout:none}
+/* 訪客也能把擋到字的圖撥開。pan-y 讓手機上直向滑還是捲頁，橫向才是拖圖 */
+.stickers.free .stk{cursor:grab;touch-action:pan-y;-webkit-touch-callout:none}
+.stickers.free .stk:active{cursor:grabbing}
 .stickers.editing .stk{outline:2px dashed var(--sea);outline-offset:4px}
 .stickers .stk.dragging{cursor:grabbing;outline:2px dashed var(--rose);outline-offset:4px;z-index:2}
 .stickers.editing .stk .tools{display:flex}
@@ -309,6 +312,7 @@ footer svg{width:100%;max-width:520px;height:auto}
   <section class="wishes" aria-labelledby="w-h">
     <p class="eyebrow">寫給十八歲的你</p>
     <h2 id="w-h">一些祝福</h2>
+    <p class="stage-hint" id="stk-hint" hidden>照片擋到字的話，直接把它拖開就好</p>
     <div class="arrange" id="arrange" hidden>
       <button class="btn" id="arr-toggle" aria-pressed="false">開始排版</button>
       <button class="home" id="arr-reset" hidden>全部回到原位</button>
@@ -605,16 +609,20 @@ tab.addEventListener('click',()=>{
 });
 
 /* ---------- shared drag helper: window-level listeners, works with mouse and touch ---------- */
-function makeDrag(el,{can,start,move,end}){
+/* lockTouch：回傳 true 時，手指按在上面就不讓頁面捲動（自己排版時要這樣）。
+   回傳 false 就只吃滑鼠和橫向拖曳，手機上直向滑還是正常捲頁。 */
+function makeDrag(el,{can,start,move,end,lockTouch}){
   let id=null,sx=0,sy=0,moved=false;
-  const mv=e=>{if(e.pointerId!==id)return;const dx=e.clientX-sx,dy=e.clientY-sy;if(!moved&&Math.hypot(dx,dy)<4)return;moved=true;e.preventDefault();move(dx,dy);};
+  const lock=e=>lockTouch?lockTouch():true;
+  const mv=e=>{if(e.pointerId!==id)return;const dx=e.clientX-sx,dy=e.clientY-sy;if(!moved&&Math.hypot(dx,dy)<4)return;moved=true;if(e.cancelable)e.preventDefault();move(dx,dy);};
   const up=e=>{if(e.pointerId!==id)return;id=null;removeEventListener('pointermove',mv);removeEventListener('pointerup',up);removeEventListener('pointercancel',up);end(moved);};
   el.addEventListener('pointerdown',e=>{
     if(id!==null||!can(e))return;if(e.pointerType==='mouse'&&e.button!==0)return;
-    e.preventDefault();id=e.pointerId;sx=e.clientX;sy=e.clientY;moved=false;start();
+    if(e.pointerType==='mouse'||lock(e))e.preventDefault();
+    id=e.pointerId;sx=e.clientX;sy=e.clientY;moved=false;start();
     addEventListener('pointermove',mv,{passive:false});addEventListener('pointerup',up);addEventListener('pointercancel',up);
   });
-  el.addEventListener('touchstart',e=>{if(can(e))e.preventDefault();},{passive:false});
+  el.addEventListener('touchstart',e=>{if(can(e)&&lock(e))e.preventDefault();},{passive:false});
   el.addEventListener('dragstart',e=>e.preventDefault());
 }
 
@@ -674,7 +682,7 @@ arrReset.addEventListener('click',()=>{layout={};applyLayout();save();});
 /* ---------- photo stickers (owner adds, everyone sees) ---------- */
 const BAKED_STK=(window.STICKERS||[]).map(o=>({...o,id:o.file,url:'images/'+o.file}));
 let lastDeleted=null,undoT=0,stkLoaded=false;
-let stk=[...BAKED_STK],stkEdit=false,stkOwner=false,sRef=null,assetsNs=null,sDrag=false;
+let stk=[...BAKED_STK],stkEdit=false,stkOwner=false,stkFree=false,sRef=null,assetsNs=null,sDrag=false;
 const stLayer=byId('stickers'),wrapEl=document.querySelector('.wrap'),stkMsg=byId('stk-msg');
 const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej({code:'timeout'}),ms))]);
 const clampW=w=>Math.max(80,Math.min(w,420,(wrapEl.clientWidth||400)-20));
@@ -740,7 +748,8 @@ function renderStk(){
     });
     let ox=0,oy=0;
     makeDrag(d,{
-      can:e=>stkOwner&&!(e.target.closest&&e.target.closest('button')),
+      can:e=>(stkOwner||stkFree)&&!(e.target.closest&&e.target.closest('button')),
+      lockTouch:()=>stkOwner,
       start:()=>{sDrag=true;ox=s.x*wrapEl.clientWidth;oy=stkTop(s);d.classList.add('dragging');},
       move:(dx,dy)=>{const W=wrapEl.clientWidth||1;s.x=Math.max(0,Math.min(1,(ox+dx)/W));setStkTop(s,Math.max(0,oy+dy));placeStk(d,s);},
       end:moved=>{sDrag=false;d.classList.remove('dragging');if(moved)saveStk();}
@@ -798,6 +807,13 @@ byId('stk-file').addEventListener('change',async e=>{
   const can=user?await user.canEdit():false;
   if(can&&db&&assets){byId('owner-bar').hidden=false;stkOwner=true;stLayer.classList.add('owner');}
 })();
+
+/* ---------- 訪客可以把擋到字的圖撥開 ----------
+   位置不會存檔，重新整理就回到原本排好的樣子 */
+if(!(window.claude&&window.claude.use)&&location.hash!=='#edit'){
+  stkFree=true;stLayer.classList.add('free');
+  if(stk.length)byId('stk-hint').hidden=false;
+}
 
 /* ---------- local edit mode: open index.html#edit ---------- */
 if(location.hash==='#edit'&&!(window.claude&&window.claude.use)){
